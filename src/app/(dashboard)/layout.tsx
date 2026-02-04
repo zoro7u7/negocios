@@ -9,7 +9,8 @@ import {
   Briefcase, 
   UserCircle, 
   Settings,
-  LogOut
+  LogOut,
+  FileBarChart
 } from "lucide-react";
 
 export default async function DashboardLayout({
@@ -33,6 +34,7 @@ export default async function DashboardLayout({
   ];
 
   if (session.user?.role === "admin") {
+    menuItems.push({ name: "Reportes", href: "/reports", icon: FileBarChart });
     menuItems.push({ name: "Configuración", href: "/settings", icon: Settings });
   }
 
