@@ -3,10 +3,10 @@ import { getServices } from "@/actions/services";
 import { getConfig } from "@/actions/config";
 import { getDashboardStats } from "@/actions/dashboard";
 import { getSalesReport } from "@/actions/reports";
-import { 
-  TrendingUp, 
-  Package, 
-  Briefcase, 
+import {
+  TrendingUp,
+  Package,
+  Briefcase,
   AlertCircle,
   Banknote,
   ShoppingCart,
@@ -23,7 +23,8 @@ export default async function DashboardPage() {
   const recentSales = await getSalesReport();
 
   const stats = [
-    { name: "Ventas de Hoy", value: `$${Number(dbStats.todaySalesUsd).toFixed(2)}`, subValue: `${dbStats.todaySalesCount} transacciones`, icon: TrendingUp, color: "text-green-600", bg: "bg-green-50" },
+    { name: "Ventas de Hoy", value: `$${Number(dbStats.todaySalesUsd).toFixed(2)}`, subValue: `Eq. Bs ${Number(dbStats.todaySalesBs).toFixed(2)}`, icon: TrendingUp, color: "text-green-600", bg: "bg-green-50" },
+
     { name: "Clientes Totales", value: dbStats.totalClients.toString(), subValue: "Base de datos activa", icon: Users, color: "text-blue-600", bg: "bg-blue-50" },
     { name: "Alertas Stock", value: dbStats.lowStockCount.toString(), subValue: "Productos por debajo de 5", icon: AlertCircle, color: "text-orange-600", bg: "bg-orange-50" },
     { name: "Tasa BCV", value: `${config?.bcvRate || 0}`, subValue: `${config?.currencySymbol} por Dólar`, icon: Banknote, color: "text-purple-600", bg: "bg-purple-50" },
@@ -36,8 +37,8 @@ export default async function DashboardPage() {
           <h1 className="text-3xl font-black text-gray-900 uppercase tracking-tight">Panel de Control</h1>
           <p className="text-gray-500">Resumen operativo del sistema POS.</p>
         </div>
-        <Link 
-          href="/pos" 
+        <Link
+          href="/pos"
           className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 shadow-lg shadow-blue-200 transition-all hover:scale-105 active:scale-95"
         >
           <ShoppingCart className="h-5 w-5" />
@@ -114,7 +115,8 @@ export default async function DashboardPage() {
                 </div>
                 <div className="text-right">
                   <p className="font-black text-gray-900 text-sm">${Number(sale.totalUsd).toFixed(2)}</p>
-                  <p className="text-[10px] text-blue-600 font-black uppercase tracking-tighter">{sale.paymentMethod}</p>
+                  <p className="text-[10px] text-blue-600 font-bold tracking-tighter uppercase whitespace-nowrap">Bs {Number(sale.totalBs).toFixed(2)}</p>
+
                 </div>
               </div>
             ))}

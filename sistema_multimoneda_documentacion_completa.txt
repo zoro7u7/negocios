@@ -1,0 +1,816 @@
+# SISTEMA DE MULTIMONEDA (Bs / USD) - DOCUMENTACIÓN TÉCNICA COMPLETA
+
+## RESUMEN EJECUTIVO
+
+Este documento describe en detalle el sistema de multimoneda implementado en el sistema POS de peluquería RolMar, que maneja simultáneamente **Bolívares (Bs)** y **Dólares ($)** con conversión automática basada en la tasa de cambio del Banco Central de Venezuela (BCV).
+
+**Principio fundamental:** Todos los precios se almacenan y calculan en **DÓLARES (USD)** como moneda base, y se convierten a **BOLÍVARES (Bs)** en tiempo real usando la tasa BCV configurada.
+
+---
+
+## 1. ARQUITECTURA DE DATOS
+
+### 1.1 Tabla: `configurations`
+
+**Propósito:** Almacena la configuración global del sistema, incluyendo la tasa de cambio actual.
+
+```sql
+CREATE TABLE configurations (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    bcv_rate DECIMAL(10, 2) COMMENT 'Tasa BCV actual en Bolívares por Dólar',
+    currency_symbol VARCHAR(10) DEFAULT 'Bs' COMMENT 'Símbolo de la moneda local',
+    referral_amount DECIMAL(10, 2) COMMENT 'Monto de comisión por referido',
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+```
+
+**Características clave:**
+- Solo existe **UN registro** en esta tabla (singleton pattern)
+- `bcv_rate`: Tasa de conversión USD → Bs (ejemplo: 50.25 significa 1 USD = 50.25 Bs)
+- Se actualiza manualmente o mediante scraping automático del portal BCV
+
+### 1.2 Tabla: `invoices`
+
+**Propósito:** Almacena las facturas/ventas con totales en ambas monedas.
+
+```sql
+CREATE TABLE invoices (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    user_id BIGINT COMMENT 'Usuario que generó la factura',
+    client_name VARCHAR(255) COMMENT 'Nombre del cliente',
+    client_address TEXT,
+    client_phone VARCHAR(50),
+    client_document VARCHAR(50),
+    bcv_rate_snapshot DECIMAL(10, 2) COMMENT 'Tasa BCV al momento de la factura',
+    total_usd DECIMAL(10, 2) COMMENT 'Total en Dólares',
+    total_bs DECIMAL(10, 2) COMMENT 'Total en Bolívares',
+    descuento DECIMAL(10, 2) DEFAULT 0,
+    payment_method ENUM('efectivo', 'punto', 'pago_movil', 'mixto'),
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+```
+
+**Características clave:**
+- `bcv_rate_snapshot`: **Snapshot histórico** de la tasa BCV al momento de crear la factura
+- `total_usd`: Total calculado en dólares (moneda base)
+- `total_bs`: Total convertido a bolívares usando `bcv_rate_snapshot`
+- **Inmutabilidad:** Una vez creada la factura, los totales NO cambian aunque la tasa BCV se actualice
+
+### 1.3 Tabla: `services` y `products`
+
+**Propósito:** Catálogo de servicios y productos vendibles.
+
+```sql
+CREATE TABLE services (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    name VARCHAR(255),
+    price DECIMAL(10, 2) COMMENT 'Precio en USD',
+    status ENUM('active', 'inactive'),
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
+CREATE TABLE products (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    name VARCHAR(255),
+    sku VARCHAR(100),
+    price DECIMAL(10, 2) COMMENT 'Precio en USD',
+    stock INT,
+    min_stock INT,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+```
+
+**Características clave:**
+- Todos los precios se almacenan en **USD**
+- No hay campo de precio en Bs (se calcula dinámicamente)
+
+### 1.4 Tabla: `invoice_items`
+
+**Propósito:** Detalle de items individuales en cada factura.
+
+```sql
+CREATE TABLE invoice_items (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    invoice_id BIGINT,
+    service_id BIGINT NULLABLE,
+    product_id BIGINT NULLABLE,
+    colaborador_id BIGINT NULLABLE,
+    referido_id BIGINT NULLABLE,
+    quantity INT DEFAULT 1,
+    unit_price DECIMAL(10, 2) COMMENT 'Precio unitario en USD al momento de la venta',
+    subtotal DECIMAL(10, 2) COMMENT 'Subtotal en USD (quantity * unit_price)',
+    comision_porcentaje DECIMAL(5, 2),
+    comision_monto DECIMAL(10, 2),
+    referido_monto DECIMAL(10, 2),
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+```
+
+**Características clave:**
+- `unit_price`: Snapshot del precio en USD al momento de la venta
+- `subtotal`: Calculado en USD
+- No almacena valores en Bs (se calculan cuando se necesitan)
+
+---
+
+## 2. LÓGICA DE NEGOCIO
+
+### 2.1 Carga de Configuración
+
+**Ubicación:** `app/Livewire/Pos.php` (método `mount`)
+
+```php
+public function mount()
+{
+    $config = Configuration::first();
+    if ($config) {
+        $this->bcv_rate = $config->bcv_rate;  // Ejemplo: 50.25
+        $this->currency_symbol = $config->currency_symbol;  // "Bs"
+    }
+}
+```
+
+**Flujo:**
+1. Al cargar el componente POS, se obtiene la configuración global
+2. Se carga la tasa BCV actual en memoria
+3. Esta tasa se usa para todas las conversiones en tiempo real
+
+### 2.2 Cálculo de Totales en el Carrito
+
+**Ubicación:** `app/Livewire/Pos.php`
+
+```php
+// Subtotal en USD (suma de todos los items)
+public function getSubtotalProperty()
+{
+    $sum = collect($this->cart)->sum(function ($item) {
+        return $item['price'] * $item['quantity'];
+    });
+    return round($sum, 2);
+}
+
+// Total en USD (subtotal - descuento)
+public function getTotalProperty()
+{
+    $total = $this->subtotal - (float) $this->discount;
+    return round(max(0, $total), 2);
+}
+
+// Total en Bs (conversión en tiempo real)
+public function getTotalBsProperty()
+{
+    return round($this->total * $this->bcv_rate, 2);
+}
+```
+
+**Fórmulas:**
+```
+Subtotal USD = Σ(precio_item_usd × cantidad)
+Total USD = Subtotal USD - Descuento USD
+Total Bs = Total USD × Tasa BCV
+```
+
+### 2.3 Creación de Factura
+
+**Ubicación:** `app/Livewire/Pos.php` (método `saveInvoice`)
+
+```php
+public function saveInvoice()
+{
+    // ...
+    $invoice = Invoice::create([
+        'user_id' => auth()->id(),
+        'client_name' => $this->client_name,
+        'bcv_rate_snapshot' => $this->bcv_rate,  // SNAPSHOT de la tasa actual
+        'total_usd' => $this->total,              // Total calculado en USD
+        'total_bs' => $this->total_bs,            // Total convertido a Bs
+        'descuento' => $this->discount,
+        'payment_method' => $this->payment_method,
+    ]);
+    
+    // Crear items individuales
+    foreach ($this->cart as $item) {
+        InvoiceItem::create([
+            'invoice_id' => $invoice->id,
+            'service_id' => $item['type'] === 'service' ? $item['id'] : null,
+            'product_id' => $item['type'] === 'product' ? $item['id'] : null,
+            'quantity' => $item['quantity'],
+            'unit_price' => $item['price'],  // Precio en USD
+            'subtotal' => $item['price'] * $item['quantity'],  // Subtotal en USD
+        ]);
+    }
+}
+```
+
+**Características clave:**
+1. Se guarda un **snapshot** de la tasa BCV (`bcv_rate_snapshot`)
+2. Se almacenan ambos totales: USD y Bs
+3. Los items individuales solo guardan valores en USD
+4. **Inmutabilidad:** La factura queda "congelada" con la tasa del momento
+
+### 2.4 Actualización de Tasa BCV
+
+**Ubicación:** `app/Http/Controllers/ConfigurationController.php`
+
+```php
+// Actualización manual
+public function update(Request $request)
+{
+    $validated = $request->validate([
+        'bcv_rate' => 'required|numeric|min:0|max:999999.99',
+        'currency_symbol' => 'nullable|string|max:10',
+    ]);
+    
+    $configuration = Configuration::first();
+    if ($configuration) {
+        $configuration->update($validated);
+    } else {
+        Configuration::create($validated);
+    }
+}
+
+// Actualización automática (scraping)
+public function scrapeBcvRate(BcvScraper $scraper)
+{
+    $rate = $scraper->getUsdRate();  // Obtiene tasa del portal BCV
+    
+    if ($rate) {
+        $configuration = Configuration::first();
+        $configuration->update(['bcv_rate' => $rate]);
+    }
+}
+```
+
+**Importante:**
+- Actualizar la tasa BCV **NO afecta** facturas anteriores
+- Solo afecta nuevas ventas y visualización en tiempo real
+
+---
+
+## 3. PRESENTACIÓN EN LA INTERFAZ
+
+### 3.1 Vista del POS (Carrito)
+
+**Ubicación:** `resources/views/livewire/pos.blade.php`
+
+```blade
+<!-- Muestra la tasa BCV actual -->
+<div>
+    <span>Cambio Oficial BCV</span>
+    <span>{{ number_format($bcv_rate, 2) }} Bs</span>
+</div>
+
+<!-- Muestra el total en USD (moneda principal) -->
+<div>
+    <span>Inversión Final</span>
+    <div>${{ number_format($this->total, 2) }}</div>
+</div>
+
+<!-- Muestra el total en Bs (referencia convertida) -->
+<div>
+    <span>{{ number_format($this->total_bs, 2) }} {{ $currency_symbol }}</span>
+</div>
+```
+
+**Jerarquía visual:**
+1. **Primario:** Total en USD (tamaño grande, color destacado)
+2. **Secundario:** Total en Bs (tamaño menor, color atenuado)
+3. **Referencia:** Tasa BCV actual
+
+### 3.2 Vista de Factura PDF
+
+**Ubicación:** `resources/views/invoices/pdf.blade.php`
+
+```blade
+<!-- Totales en la factura -->
+<table>
+    <tr>
+        <td>Subtotal Bruto</td>
+        <td>${{ number_format($invoice->total_usd + $invoice->descuento, 2) }}</td>
+    </tr>
+    
+    @if($invoice->descuento > 0)
+    <tr>
+        <td>Descuento Aplicado</td>
+        <td>-${{ number_format($invoice->descuento, 2) }}</td>
+    </tr>
+    @endif
+    
+    <tr>
+        <td>Referencia ({{ number_format($invoice->bcv_rate_snapshot, 2) }} Bs)</td>
+        <td>{{ number_format($invoice->total_bs, 2) }} Bs</td>
+    </tr>
+    
+    <tr>
+        <td>Inversión Total</td>
+        <td>${{ number_format($invoice->total_usd, 2) }}</td>
+    </tr>
+</table>
+```
+
+**Características:**
+- Muestra la tasa BCV histórica (`bcv_rate_snapshot`)
+- Total en Bs es una "referencia" informativa
+- Total en USD es el valor oficial de la transacción
+
+---
+
+## 4. REGLAS DE NEGOCIO CRÍTICAS
+
+### 4.1 Moneda Base: USD
+
+**Regla:** TODOS los cálculos financieros se realizan en USD.
+
+**Razón:** En economías con alta inflación, el USD proporciona estabilidad. Los precios en Bs cambiarían constantemente, pero en USD permanecen estables.
+
+### 4.2 Conversión en Tiempo Real
+
+**Regla:** La conversión USD → Bs se calcula dinámicamente usando la tasa BCV actual.
+
+```
+Total Bs (tiempo real) = Total USD × Tasa BCV actual
+```
+
+### 4.3 Snapshot Histórico
+
+**Regla:** Cada factura guarda un snapshot de la tasa BCV del momento de la venta.
+
+**Razón:** Permite auditoría histórica y evita que cambios en la tasa afecten registros pasados.
+
+### 4.4 Precisión Decimal
+
+**Regla:** Todos los valores monetarios usan `DECIMAL(10, 2)`.
+
+- 10 dígitos totales
+- 2 decimales
+- Ejemplo: 99999999.99
+
+**Razón:** Evita errores de redondeo de punto flotante.
+
+### 4.5 Redondeo
+
+**Regla:** Todos los cálculos se redondean a 2 decimales usando `round($value, 2)`.
+
+```php
+return round($this->total * $this->bcv_rate, 2);
+```
+
+---
+
+## 5. FLUJO COMPLETO DE UNA VENTA
+
+### Paso 1: Usuario agrega items al carrito
+- Items tienen precio en USD
+- Se calcula subtotal en USD
+
+### Paso 2: Sistema calcula totales en tiempo real
+```
+Subtotal USD = Σ(precio × cantidad)
+Total USD = Subtotal USD - Descuento
+Total Bs = Total USD × Tasa BCV actual
+```
+
+### Paso 3: Usuario visualiza ambas monedas
+- **Principal:** $50.00 (USD)
+- **Referencia:** 2,512.50 Bs (usando tasa 50.25)
+
+### Paso 4: Usuario finaliza la venta
+- Sistema guarda factura con:
+  - `total_usd`: 50.00
+  - `total_bs`: 2512.50
+  - `bcv_rate_snapshot`: 50.25
+
+### Paso 5: Factura queda inmutable
+- Si mañana la tasa BCV cambia a 55.00, la factura sigue mostrando:
+  - Total USD: $50.00
+  - Total Bs: 2,512.50 Bs (con tasa histórica 50.25)
+
+---
+
+## 6. GUÍA DE IMPLEMENTACIÓN PARA CUALQUIER STACK
+
+### 6.1 Estructura de Base de Datos
+
+```sql
+-- Tabla de configuración (singleton)
+CREATE TABLE configuration (
+    id INT PRIMARY KEY,
+    exchange_rate DECIMAL(10, 2),  -- Tasa de cambio
+    local_currency_symbol VARCHAR(10),
+    updated_at TIMESTAMP
+);
+
+-- Tabla de productos/servicios
+CREATE TABLE items (
+    id INT PRIMARY KEY,
+    name VARCHAR(255),
+    price_usd DECIMAL(10, 2),  -- Siempre en USD
+    -- otros campos...
+);
+
+-- Tabla de facturas
+CREATE TABLE invoices (
+    id INT PRIMARY KEY,
+    exchange_rate_snapshot DECIMAL(10, 2),  -- Tasa histórica
+    total_usd DECIMAL(10, 2),               -- Total en USD
+    total_local DECIMAL(10, 2),             -- Total en moneda local
+    -- otros campos...
+);
+
+-- Tabla de items de factura
+CREATE TABLE invoice_items (
+    id INT PRIMARY KEY,
+    invoice_id INT,
+    item_id INT,
+    quantity INT,
+    unit_price_usd DECIMAL(10, 2),  -- Precio en USD
+    subtotal_usd DECIMAL(10, 2),    -- Subtotal en USD
+    -- otros campos...
+);
+```
+
+### 6.2 Lógica de Cálculo (Pseudocódigo)
+
+```javascript
+// Cargar configuración
+function loadConfiguration() {
+    config = database.query("SELECT * FROM configuration LIMIT 1");
+    return {
+        exchangeRate: config.exchange_rate,
+        currencySymbol: config.local_currency_symbol
+    };
+}
+
+// Calcular subtotal en USD
+function calculateSubtotalUSD(cartItems) {
+    subtotal = 0;
+    for (item in cartItems) {
+        subtotal += item.price_usd * item.quantity;
+    }
+    return round(subtotal, 2);
+}
+
+// Calcular total en USD
+function calculateTotalUSD(subtotalUSD, discount) {
+    total = subtotalUSD - discount;
+    return round(max(0, total), 2);
+}
+
+// Convertir USD a moneda local
+function convertToLocal(amountUSD, exchangeRate) {
+    return round(amountUSD * exchangeRate, 2);
+}
+
+// Crear factura
+function createInvoice(cart, discount, paymentMethod) {
+    config = loadConfiguration();
+    
+    subtotalUSD = calculateSubtotalUSD(cart);
+    totalUSD = calculateTotalUSD(subtotalUSD, discount);
+    totalLocal = convertToLocal(totalUSD, config.exchangeRate);
+    
+    invoice = database.insert("invoices", {
+        exchange_rate_snapshot: config.exchangeRate,  // SNAPSHOT
+        total_usd: totalUSD,
+        total_local: totalLocal,
+        payment_method: paymentMethod,
+        created_at: now()
+    });
+    
+    for (item in cart) {
+        database.insert("invoice_items", {
+            invoice_id: invoice.id,
+            item_id: item.id,
+            quantity: item.quantity,
+            unit_price_usd: item.price_usd,  // Precio en USD
+            subtotal_usd: item.price_usd * item.quantity
+        });
+    }
+    
+    return invoice;
+}
+```
+
+### 6.3 Presentación en UI (React/Vue/Angular)
+
+```javascript
+// Componente de carrito
+function CartComponent() {
+    const [cart, setCart] = useState([]);
+    const [exchangeRate, setExchangeRate] = useState(0);
+    const [discount, setDiscount] = useState(0);
+    
+    // Cargar tasa de cambio
+    useEffect(() => {
+        fetch('/api/configuration')
+            .then(res => res.json())
+            .then(data => setExchangeRate(data.exchange_rate));
+    }, []);
+    
+    // Calcular totales
+    const subtotalUSD = cart.reduce((sum, item) => 
+        sum + (item.price_usd * item.quantity), 0
+    ).toFixed(2);
+    
+    const totalUSD = Math.max(0, subtotalUSD - discount).toFixed(2);
+    const totalLocal = (totalUSD * exchangeRate).toFixed(2);
+    
+    return (
+        <div>
+            <h2>Carrito</h2>
+            
+            {/* Items del carrito */}
+            {cart.map(item => (
+                <div key={item.id}>
+                    <span>{item.name}</span>
+                    <span>${item.price_usd.toFixed(2)}</span>
+                    <span>Qty: {item.quantity}</span>
+                </div>
+            ))}
+            
+            {/* Totales */}
+            <div>
+                <p>Tasa de cambio: {exchangeRate.toFixed(2)} Bs</p>
+                <p>Subtotal: ${subtotalUSD}</p>
+                <p>Descuento: ${discount.toFixed(2)}</p>
+                <h3>Total: ${totalUSD}</h3>
+                <p>Referencia: {totalLocal} Bs</p>
+            </div>
+        </div>
+    );
+}
+```
+
+### 6.4 API REST (Node.js/Python/Java)
+
+```javascript
+// Endpoint para crear factura
+app.post('/api/invoices', async (req, res) => {
+    const { cart, discount, paymentMethod } = req.body;
+    
+    // Obtener configuración actual
+    const config = await db.query(
+        'SELECT exchange_rate FROM configuration LIMIT 1'
+    );
+    const exchangeRate = config.rows[0].exchange_rate;
+    
+    // Calcular totales
+    const subtotalUSD = cart.reduce((sum, item) => 
+        sum + (item.price_usd * item.quantity), 0
+    );
+    const totalUSD = Math.max(0, subtotalUSD - discount);
+    const totalLocal = totalUSD * exchangeRate;
+    
+    // Crear factura con snapshot de tasa
+    const invoice = await db.query(`
+        INSERT INTO invoices (
+            exchange_rate_snapshot, 
+            total_usd, 
+            total_local, 
+            payment_method
+        ) VALUES ($1, $2, $3, $4)
+        RETURNING *
+    `, [
+        exchangeRate,  // SNAPSHOT histórico
+        totalUSD.toFixed(2),
+        totalLocal.toFixed(2),
+        paymentMethod
+    ]);
+    
+    // Crear items
+    for (const item of cart) {
+        await db.query(`
+            INSERT INTO invoice_items (
+                invoice_id, 
+                item_id, 
+                quantity, 
+                unit_price_usd, 
+                subtotal_usd
+            ) VALUES ($1, $2, $3, $4, $5)
+        `, [
+            invoice.rows[0].id,
+            item.id,
+            item.quantity,
+            item.price_usd,
+            (item.price_usd * item.quantity).toFixed(2)
+        ]);
+    }
+    
+    res.json(invoice.rows[0]);
+});
+```
+
+---
+
+## 7. CASOS DE USO Y EJEMPLOS
+
+### Caso 1: Venta Simple
+
+**Escenario:**
+- Servicio: Corte de cabello ($10.00)
+- Tasa BCV: 50.25 Bs/$
+- Sin descuento
+
+**Cálculos:**
+```
+Subtotal USD = $10.00
+Total USD = $10.00
+Total Bs = $10.00 × 50.25 = 502.50 Bs
+```
+
+**Registro en BD:**
+```sql
+INSERT INTO invoices VALUES (
+    bcv_rate_snapshot: 50.25,
+    total_usd: 10.00,
+    total_bs: 502.50
+);
+```
+
+### Caso 2: Venta con Descuento
+
+**Escenario:**
+- Servicio 1: Corte ($10.00)
+- Servicio 2: Tinte ($25.00)
+- Descuento: $5.00
+- Tasa BCV: 50.25 Bs/$
+
+**Cálculos:**
+```
+Subtotal USD = $10.00 + $25.00 = $35.00
+Total USD = $35.00 - $5.00 = $30.00
+Total Bs = $30.00 × 50.25 = 1,507.50 Bs
+```
+
+### Caso 3: Cambio de Tasa BCV
+
+**Día 1:**
+- Tasa BCV: 50.25 Bs/$
+- Venta: $100.00
+- Total Bs: 5,025.00 Bs
+- Factura #1 guardada con snapshot 50.25
+
+**Día 2:**
+- Tasa BCV actualizada a: 55.00 Bs/$
+- Nueva venta: $100.00
+- Total Bs: 5,500.00 Bs
+- Factura #2 guardada con snapshot 55.00
+
+**Resultado:**
+- Factura #1 sigue mostrando: $100.00 = 5,025.00 Bs (tasa 50.25)
+- Factura #2 muestra: $100.00 = 5,500.00 Bs (tasa 55.00)
+
+---
+
+## 8. VALIDACIONES Y REGLAS DE NEGOCIO
+
+### 8.1 Validación de Tasa de Cambio
+
+```php
+// Laravel
+'bcv_rate' => 'required|numeric|min:0|max:999999.99'
+```
+
+**Reglas:**
+- Debe ser numérico
+- No puede ser negativo
+- Máximo 999,999.99
+
+### 8.2 Validación de Precios
+
+```php
+// Todos los precios deben ser positivos
+'price' => 'required|numeric|min:0.01'
+```
+
+### 8.3 Validación de Descuentos
+
+```php
+// El descuento no puede ser mayor que el subtotal
+if ($discount > $subtotal) {
+    throw new Exception("Descuento no puede exceder el subtotal");
+}
+```
+
+### 8.4 Precisión en Cálculos
+
+```php
+// Siempre redondear a 2 decimales
+$total = round($subtotal - $discount, 2);
+$totalBs = round($total * $bcvRate, 2);
+```
+
+---
+
+## 9. CONSIDERACIONES TÉCNICAS
+
+### 9.1 Tipo de Datos
+
+**Usar DECIMAL, NO FLOAT:**
+```sql
+-- ✅ CORRECTO
+price DECIMAL(10, 2)
+
+-- ❌ INCORRECTO
+price FLOAT
+```
+
+**Razón:** Los tipos FLOAT/DOUBLE tienen errores de precisión que pueden causar discrepancias en cálculos financieros.
+
+### 9.2 Transacciones
+
+```php
+DB::beginTransaction();
+try {
+    // Crear factura
+    $invoice = Invoice::create([...]);
+    
+    // Crear items
+    foreach ($cart as $item) {
+        InvoiceItem::create([...]);
+    }
+    
+    // Actualizar stock si es producto
+    if ($item['type'] === 'product') {
+        Product::where('id', $item['id'])
+            ->decrement('stock', $item['quantity']);
+    }
+    
+    DB::commit();
+} catch (Exception $e) {
+    DB::rollBack();
+    throw $e;
+}
+```
+
+**Razón:** Garantiza consistencia de datos.
+
+### 9.3 Índices de Base de Datos
+
+```sql
+-- Índices recomendados
+CREATE INDEX idx_invoices_created_at ON invoices(created_at);
+CREATE INDEX idx_invoice_items_invoice_id ON invoice_items(invoice_id);
+CREATE INDEX idx_products_price ON products(price);
+```
+
+---
+
+## 10. RESUMEN DE IMPLEMENTACIÓN
+
+### Checklist para Implementar Multimoneda:
+
+#### Base de Datos
+- [ ] Crear tabla de configuración con campo `exchange_rate`
+- [ ] Agregar campos en facturas: `exchange_rate_snapshot`, `total_usd`, `total_local`
+- [ ] Usar tipo DECIMAL(10, 2) para todos los campos monetarios
+- [ ] Almacenar precios solo en USD
+
+#### Lógica de Negocio
+- [ ] Cargar tasa de cambio al iniciar sesión/cargar página
+- [ ] Calcular todos los totales en USD primero
+- [ ] Convertir a moneda local multiplicando por tasa de cambio
+- [ ] Guardar snapshot de tasa en cada factura
+- [ ] Redondear todos los valores a 2 decimales
+
+#### Interfaz de Usuario
+- [ ] Mostrar tasa de cambio actual
+- [ ] Mostrar total en USD (principal)
+- [ ] Mostrar total en moneda local (referencia)
+- [ ] Permitir actualización manual de tasa de cambio
+- [ ] En facturas históricas, mostrar tasa del momento
+
+#### Validaciones
+- [ ] Validar que tasa de cambio sea positiva
+- [ ] Validar que precios sean positivos
+- [ ] Validar que descuentos no excedan subtotal
+- [ ] Usar transacciones para operaciones críticas
+
+---
+
+## 11. VENTAJAS DE ESTE SISTEMA
+
+1. **Estabilidad de Precios:** Los precios en USD no cambian con la inflación
+2. **Flexibilidad:** Fácil actualización de tasa de cambio
+3. **Auditoría:** Historial completo con tasas del momento
+4. **Transparencia:** Cliente ve ambas monedas
+5. **Simplicidad:** Un solo punto de configuración (tasa BCV)
+6. **Escalabilidad:** Fácil agregar más monedas si es necesario
+
+---
+
+## 12. CONCLUSIÓN
+
+Este sistema de multimoneda es robusto, auditable y fácil de mantener. La clave está en:
+
+1. **USD como moneda base** para todos los cálculos
+2. **Conversión en tiempo real** para visualización
+3. **Snapshot histórico** para inmutabilidad de facturas
+4. **Precisión decimal** para evitar errores de redondeo
+
+Puede ser replicado en cualquier stack tecnológico siguiendo los principios descritos en este documento.

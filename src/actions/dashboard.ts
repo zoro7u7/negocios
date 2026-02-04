@@ -10,10 +10,11 @@ export async function getDashboardStats() {
 
   const [salesResult] = await db.select({
     totalUsd: sql<number>`COALESCE(sum(${invoices.totalUsd}), 0)`,
+    totalBs: sql<number>`COALESCE(sum(${invoices.totalBs}), 0)`,
     count: sql<number>`count(${invoices.id})`
   })
-  .from(invoices)
-  .where(gte(invoices.createdAt, today))
+    .from(invoices)
+    .where(gte(invoices.createdAt, today))
 
   const [totalClients] = await db.select({
     count: sql<number>`count(${clients.id})`
@@ -22,11 +23,12 @@ export async function getDashboardStats() {
   const [lowStock] = await db.select({
     count: sql<number>`count(${products.id})`
   })
-  .from(products)
-  .where(sql`${products.stock} <= 5`)
+    .from(products)
+    .where(sql`${products.stock} <= 5`)
 
   return {
     todaySalesUsd: salesResult.totalUsd,
+    todaySalesBs: salesResult.totalBs,
     todaySalesCount: salesResult.count,
     totalClients: totalClients.count,
     lowStockCount: lowStock.count

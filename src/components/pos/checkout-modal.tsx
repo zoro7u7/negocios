@@ -31,7 +31,7 @@ export function CheckoutModal() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
-  
+
   // Para pago mixto
   const [mixedPayments, setMixedPayments] = useState({
     efectivo: 0,
@@ -49,14 +49,14 @@ export function CheckoutModal() {
     if (!method) return
     setLoading(true)
     setError(null)
-    
+
     try {
       const payments = []
       if (method === 'mixto') {
         if (mixedPayments.efectivo > 0) payments.push({ method: 'efectivo' as const, amountUsd: mixedPayments.efectivo })
         if (mixedPayments.punto > 0) payments.push({ method: 'punto' as const, amountUsd: mixedPayments.punto })
         if (mixedPayments.pago_movil > 0) payments.push({ method: 'pago_movil' as const, amountUsd: mixedPayments.pago_movil })
-        
+
         const sum = payments.reduce((acc, p) => acc + p.amountUsd, 0)
         if (Math.abs(sum - total) > 0.01) {
           throw new Error(`La suma de los pagos ($${sum.toFixed(2)}) no coincide con el total ($${total.toFixed(2)})`)
@@ -86,7 +86,7 @@ export function CheckoutModal() {
       if (result.success) {
         toast.success("¡Venta procesada con éxito!")
         setSuccess(true)
-        
+
         // Generar PDF
         generateInvoicePDF({
           invoiceId: result.invoiceId,
@@ -115,8 +115,8 @@ export function CheckoutModal() {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button 
-          disabled={items.length === 0} 
+        <Button
+          disabled={items.length === 0}
           className="w-full mt-4 h-12 bg-blue-600 hover:bg-blue-700 text-base font-bold shadow-lg shadow-blue-200"
         >
           CONTINUAR AL PAGO
@@ -137,10 +137,16 @@ export function CheckoutModal() {
           </div>
         ) : (
           <div className="space-y-6 pt-4">
-            <div className="bg-gray-50 p-4 rounded-xl border text-center">
-              <p className="text-xs uppercase font-bold text-gray-500">Monto Total a Cobrar</p>
-              <h2 className="text-3xl font-black text-blue-600">${total.toFixed(2)}</h2>
+            <div className="bg-blue-50/50 p-6 rounded-2xl border border-blue-100 text-center space-y-1">
+              <p className="text-[10px] uppercase font-black text-blue-400 tracking-widest">Monto Total a Cobrar</p>
+              <h2 className="text-4xl font-black text-blue-600 tracking-tight">${total.toFixed(2)}</h2>
+              <div className="pt-2 flex items-center justify-center gap-2">
+                <span className="h-px w-4 bg-gray-200"></span>
+                <p className="text-sm font-bold text-gray-400">Referencia: <span className="text-gray-900">Bs {(total * useCartStore.getState().bcvRate).toFixed(2)}</span></p>
+                <span className="h-px w-4 bg-gray-200"></span>
+              </div>
             </div>
+
 
             {!method ? (
               <div className="space-y-3">
@@ -170,29 +176,29 @@ export function CheckoutModal() {
                     <div className="grid gap-4">
                       <div className="space-y-1">
                         <Label className="text-[10px] font-black uppercase">Efectivo ($)</Label>
-                        <Input 
-                          type="number" 
-                          step="0.01" 
-                          value={mixedPayments.efectivo} 
-                          onChange={(e) => setMixedPayments({...mixedPayments, efectivo: Number(e.target.value)})}
+                        <Input
+                          type="number"
+                          step="0.01"
+                          value={mixedPayments.efectivo}
+                          onChange={(e) => setMixedPayments({ ...mixedPayments, efectivo: Number(e.target.value) })}
                         />
                       </div>
                       <div className="space-y-1">
                         <Label className="text-[10px] font-black uppercase">Punto ($)</Label>
-                        <Input 
-                          type="number" 
-                          step="0.01" 
+                        <Input
+                          type="number"
+                          step="0.01"
                           value={mixedPayments.punto}
-                          onChange={(e) => setMixedPayments({...mixedPayments, punto: Number(e.target.value)})}
+                          onChange={(e) => setMixedPayments({ ...mixedPayments, punto: Number(e.target.value) })}
                         />
                       </div>
                       <div className="space-y-1">
                         <Label className="text-[10px] font-black uppercase">Pago Móvil ($)</Label>
-                        <Input 
-                          type="number" 
+                        <Input
+                          type="number"
                           step="0.01"
                           value={mixedPayments.pago_movil}
-                          onChange={(e) => setMixedPayments({...mixedPayments, pago_movil: Number(e.target.value)})}
+                          onChange={(e) => setMixedPayments({ ...mixedPayments, pago_movil: Number(e.target.value) })}
                         />
                       </div>
                     </div>
@@ -212,8 +218,8 @@ export function CheckoutModal() {
                   </div>
                 )}
 
-                <Button 
-                  onClick={handleProcess} 
+                <Button
+                  onClick={handleProcess}
                   disabled={loading}
                   className="w-full h-12 bg-green-600 hover:bg-green-700 text-base font-bold"
                 >

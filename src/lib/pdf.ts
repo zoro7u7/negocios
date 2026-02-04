@@ -48,29 +48,47 @@ export const generateInvoicePDF = (data: any) => {
   const finalY = doc.lastAutoTable.finalY + 10;
 
   // Totals
+  const totalsX = 140;
+  const valueX = 185;
+  
   doc.setFontSize(10);
-  doc.text(`Subtotal:`, 140, finalY);
-  doc.text(`$${data.subtotal.toFixed(2)}`, 170, finalY, { align: 'right' });
+  doc.setTextColor(100, 100, 100);
+  doc.text(`Subtotal:`, totalsX, finalY);
+  doc.text(`$${data.subtotal.toFixed(2)}`, valueX, finalY, { align: 'right' });
 
   if (data.ivaAmount > 0) {
-    doc.text(`IVA (16%):`, 140, finalY + 7);
-    doc.text(`$${data.ivaAmount.toFixed(2)}`, 170, finalY + 7, { align: 'right' });
+    doc.text(`IVA (${data.ivaRateSnapshot}%):`, totalsX, finalY + 7);
+    doc.text(`$${data.ivaAmount.toFixed(2)}`, valueX, finalY + 7, { align: 'right' });
   }
 
-  doc.setFontSize(14);
-  doc.setFont("helvetica", "bold");
-  doc.text(`TOTAL USD:`, 140, finalY + 17);
-  doc.text(`$${data.totalUsd.toFixed(2)}`, 170, finalY + 17, { align: 'right' });
+  if (data.discount > 0) {
+    doc.setTextColor(220, 50, 50);
+    doc.text(`Descuento:`, totalsX, finalY + 14);
+    doc.text(`-$${data.discount.toFixed(2)}`, valueX, finalY + 14, { align: 'right' });
+  }
 
-  doc.setFontSize(12);
-  doc.text(`TOTAL BS:`, 140, finalY + 25);
-  doc.text(`Bs ${(data.totalUsd * data.bcvRate).toFixed(2)}`, 170, finalY + 25, { align: 'right' });
+  const mainTotalY = finalY + 24;
+  doc.setFontSize(14);
+  doc.setTextColor(0, 0, 0);
+  doc.setFont("helvetica", "bold");
+  doc.text(`TOTAL USD:`, totalsX, mainTotalY);
+  doc.text(`$${data.totalUsd.toFixed(2)}`, valueX, mainTotalY, { align: 'right' });
+
+  const bsTotalY = mainTotalY + 10;
+  doc.setFontSize(10);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(100, 100, 100);
+  doc.text(`Referencia Bs. (Tasa: ${data.bcvRateSnapshot.toFixed(2)}):`, totalsX, bsTotalY);
+  doc.setFont("helvetica", "bold");
+  doc.text(`${data.totalBs.toFixed(2)} Bs.`, valueX, bsTotalY, { align: 'right' });
 
   // Footer
   doc.setFontSize(8);
   doc.setFont("helvetica", "italic");
   doc.setTextColor(150, 150, 150);
-  doc.text("Gracias por su preferencia.", 105, 280, { align: 'center' });
+  doc.text("Esta factura es una representación del total en USD pagadero en Bs. a la tasa indicada.", 105, 275, { align: 'center' });
+  doc.text("Gracias por su preferencia.", 105, 282, { align: 'center' });
 
   doc.save(`factura_${data.invoiceId}.pdf`);
 };
+

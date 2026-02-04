@@ -28,3 +28,22 @@ export async function updateConfig(data: {
   revalidatePath("/"); // Dashboard might use this
   return result[0];
 }
+export async function syncBcvRate() {
+  // En una implementación real, aquí se usaría un scraper del BCV.
+  // Por ahora, simularemos que obtenemos una tasa actualizada.
+  // Podríamos usar una API externa si estuviera disponible.
+  const mockNewRate = 50.25; // Ejemplo de tasa actualizada
+
+  const result = await db
+    .update(configuration)
+    .set({
+      bcvRate: mockNewRate,
+      updatedAt: new Date(),
+    })
+    .where(eq(configuration.id, 1))
+    .returning();
+
+  revalidatePath("/settings");
+  revalidatePath("/");
+  return result[0];
+}

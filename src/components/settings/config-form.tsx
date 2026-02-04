@@ -1,7 +1,8 @@
 "use client"
 
 import { useState } from "react"
-import { updateConfig } from "@/actions/config"
+import { updateConfig, syncBcvRate } from "@/actions/config"
+
 import { Settings, RefreshCcw, Save } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { toast } from "sonner"
@@ -47,10 +48,28 @@ export function ConfigForm({ initialData }: { initialData: any }) {
               onChange={(e) => setData({ ...data, bcvRate: Number(e.target.value) })}
               className="block w-full rounded-lg border border-gray-300 p-2.5 text-sm focus:border-blue-500 focus:ring-blue-500 shadow-sm"
             />
-            <button className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors">
-              <RefreshCcw className="h-4 w-4" />
+            <button
+              onClick={async () => {
+                setLoading(true);
+                try {
+                  const result = await syncBcvRate();
+                  if (result) {
+                    setData({ ...data, bcvRate: result.bcvRate });
+                    toast.success("Tasa BCV sincronizada");
+                  }
+                } catch (e) {
+                  toast.error("Error al sincronizar tasa");
+                } finally {
+                  setLoading(false);
+                }
+              }}
+              disabled={loading}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors disabled:opacity-50"
+            >
+              <RefreshCcw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
               <span>BCV</span>
             </button>
+
           </div>
         </div>
         <div>
@@ -83,8 +102,8 @@ export function ConfigForm({ initialData }: { initialData: any }) {
         </div>
       </div>
       <div className="p-6 bg-gray-50 border-t flex justify-end">
-        <Button 
-          onClick={handleSave} 
+        <Button
+          onClick={handleSave}
           disabled={loading}
           className="flex items-center gap-2 bg-blue-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-blue-700 transition-colors shadow-sm"
         >
