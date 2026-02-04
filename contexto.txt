@@ -1,0 +1,93 @@
+SISTEMA POS EMPRESARIAL - ESPECIFICACIÓN COMPLETA
+Desarrolla un sistema de Punto de Venta (POS) empresarial completo con las siguientes características y reglas de negocio.
+
+DESCRIPCIÓN GENERAL
+Sistema POS para negocios que manejan venta de productos físicos y servicios. Soporta facturación multimoneda (USD como moneda base y conversión automática a moneda local), sistema de comisiones para colaboradores, control de inventario con prevención de sobreventas, y reportes financieros. El sistema debe manejar IVA diferenciado según el método de pago utilizado.
+
+ROLES Y PERMISOS
+Rol Admin: Acceso total al sistema incluyendo configuración, reportes, gestión de usuarios, eliminación de facturas y gestión de personal.
+
+Rol Trabajador: Acceso limitado a ventas (POS), visualización de productos y servicios. No puede eliminar facturas, ver reportes completos ni acceder a configuración del sistema.
+
+MODELO DE DATOS
+Usuarios: id, name, username (único), email (único), password (hasheado), role (admin/trabajador), timestamps.
+
+Clientes: id, name, phone (opcional), email (opcional), birthday_day (1-31, opcional), birthday_month (1-12, opcional), timestamps. Debe existir siempre un "Cliente General" como fallback para ventas sin cliente específico.
+
+Productos: id, name, sku (único), price (decimal en USD), stock (entero), min_stock (entero para alertas), timestamps. Stock bajo cuando stock <= min_stock. Stock crítico cuando stock = 0.
+
+Servicios: id, name, price (decimal en USD), status (active/inactive), timestamps. Los servicios no tienen stock y pueden generar comisiones.
+
+Colaboradores: id, nombre, area (opcional), porcentaje_comision (decimal 0-100), activo (boolean), timestamps. Son quienes realizan servicios y ganan comisiones.
+
+Facturas (Invoices): id (número de factura), user_id, client_id (opcional), client_name (snapshot), client_phone (snapshot opcional), bcv_rate_snapshot (tasa de cambio al momento de la venta), iva_rate_snapshot (tasa IVA al momento), total_usd, total_bs, iva_monto, descuento, payment_method (efectivo/punto/pago_movil/mixto), timestamps.
+
+Items de Factura: id, invoice_id, service_id (opcional), product_id (opcional), colaborador_id (opcional), referido_id (opcional, colaborador que refirió), quantity, unit_price, subtotal, comision_porcentaje, comision_monto, referido_monto, timestamps. Un item es producto O servicio, nunca ambos. Solo servicios tienen colaboradores y comisiones.
+
+Pagos de Factura: id, invoice_id, payment_method (efectivo/punto/pago_movil), amount (en USD), timestamps. Para pagos mixtos se crean múltiples registros.
+
+Configuración (singleton, solo 1 registro): id, bcv_rate (tasa de cambio actual), currency_symbol (ej: "Bs"), referral_amount (monto fijo por referido en USD), iva_rate (porcentaje, default 16), timestamps.
+
+MÓDULO DASHBOARD
+Mostrar: ventas del día (cantidad y montos USD/Bs), productos con stock bajo, servicios activos, últimas 5 facturas, tasas actuales de BCV e IVA.
+
+MÓDULO POS (PUNTO DE VENTA)
+Búsqueda: Buscar productos y servicios con mínimo 2 caracteres, case-insensitive, máximo 5 resultados. Filtrar automáticamente productos sin stock. Servicios inactivos no aparecen.
+
+Carrito: Agregar productos o servicios. Incrementar/decrementar cantidad con validación de stock en tiempo real para productos. Remover items individuales o limpiar todo. Para servicios: permitir seleccionar colaborador que realizará el servicio y opcionalmente un colaborador referido.
+
+Cliente: Buscar cliente existente por nombre o teléfono (case-insensitive) o usar Cliente General por defecto.
+
+Descuento: Campo opcional para aplicar descuento en USD al subtotal.
+
+Métodos de pago y cálculo de IVA:
+
+Para EFECTIVO (divisas): total_bs = total_usd × bcv_rate. Sin IVA (iva_monto = 0).
+
+Para PUNTO o PAGO_MOVIL: base_bs = total_usd × bcv_rate, iva_monto = base_bs × (iva_rate/100), total_bs = base_bs + iva_monto.
+
+Para MIXTO: El usuario ingresa cuánto paga con cada método. efectivo_bs = efectivo_usd × bcv_rate (sin IVA). electronico_base = (punto + pago_movil) × bcv_rate, iva_monto = electronico_base × (iva_rate/100), electronico_bs = electronico_base + iva_monto. total_bs = efectivo_bs + electronico_bs.
+
+Proceso de venta (TRANSACCIÓN ATÓMICA OBLIGATORIA): Iniciar transacción. Crear factura con snapshots de tasas y datos del cliente. Crear registros de pagos. Para cada item: si es producto, aplicar bloqueo pesimista, validar stock suficiente (si no hay, rollback con error), decrementar stock atómicamente; si es servicio, calcular comisiones. Crear item de factura. Si todo OK, commit. Si hay error, rollback. Después del éxito: generar PDF de factura, limpiar carrito, mostrar mensaje de éxito.
+
+Cálculo de comisiones (solo servicios): comision_base = (precio × cantidad) × (porcentaje_comision/100). Si hay referido: referido_monto = configuracion.referral_amount × cantidad, comision_monto = comision_base - referido_monto. Si no hay referido: comision_monto = comision_base, referido_monto = 0.
+
+MÓDULO PRODUCTOS
+CRUD completo con búsqueda en tiempo real y paginación. Validar SKU único. Mostrar alertas visuales cuando stock <= min_stock (stock bajo) o stock = 0 (crítico).
+
+MÓDULO SERVICIOS
+CRUD completo con paginación. Permitir activar/desactivar. Solo servicios activos aparecen en POS.
+
+MÓDULO CLIENTES
+CRUD completo preferiblemente en modales. Búsqueda por nombre o teléfono case-insensitive. Calendario de cumpleaños: vista mensual navegable, destacar cumpleaños del día actual, agrupar por día. Reporte individual de cliente: historial de compras, total gastado, última visita, productos/servicios más comprados.
+
+MÓDULO COLABORADORES
+CRUD completo. Configurar porcentaje de comisión individual (0-100). Activar/desactivar. Asignar área o departamento.
+
+MÓDULO USUARIOS (SOLO ADMIN)
+CRUD completo. Asignar rol (Admin o Trabajador). Permitir cambio de contraseña.
+
+MÓDULO REPORTES (SOLO ADMIN)
+Reporte general de ventas: Filtros por rango de fechas. Resumen de ventas del período. Gráficos de ventas. Exportar a PDF.
+
+Reporte de comisiones: Filtros por fecha y colaborador. Total facturado por colaborador seleccionado. Total de comisiones ganadas. Detalle de comisiones por cada servicio. Comisiones por referidos. Exportar a PDF.
+
+MÓDULO CONFIGURACIÓN (SOLO ADMIN)
+Editar tasa BCV manualmente. Opción para obtener tasa BCV automáticamente mediante scraping del portal oficial del Banco Central de Venezuela. Configurar símbolo de moneda local. Configurar monto fijo por referido en USD. Configurar tasa de IVA en porcentaje. Generar y descargar respaldo de base de datos. Exportar resumen de facturas a CSV.
+
+GENERACIÓN DE PDFs
+Factura de venta: Logo y datos del negocio, número de factura, fecha y hora, datos del cliente, usuario que generó, tabla de items con producto/servicio, cantidad, precio unitario y subtotal, subtotal general, descuento si aplica, IVA si aplica, total en USD, total en Bs, tasa BCV utilizada, método(s) de pago, detalle de pagos si es mixto.
+
+Reporte de comisiones: Período del reporte, colaborador seleccionado, tabla de servicios realizados con fechas, comisiones por servicio, comisiones por referidos, totales en USD y Bs.
+
+AUTENTICACIÓN
+Login con email o username más contraseña. Logout. Recuperación de contraseña por email. Verificación de email opcional. Usuario por defecto para desarrollo: email admin@sistema.com, password 123456789, rol Admin.
+
+REGLAS DE NEGOCIO CRÍTICAS
+La eliminación de facturas restaura el stock de productos, esto es intencional. Siempre guardar snapshot de tasas BCV e IVA al momento de la venta, nunca recalcular después. El Cliente General debe existir siempre como fallback. Usar bloqueo pesimista en productos durante transacciones de venta para prevenir sobreventas en ambientes concurrentes. El IVA solo se aplica a pagos electrónicos (punto y pago_movil), nunca a efectivo en divisas. Las comisiones solo aplican a servicios, nunca a productos.
+
+DATOS INICIALES REQUERIDOS
+Crear usuario admin por defecto con credenciales especificadas. Crear roles Admin y Trabajador con sus permisos. Crear registro de configuración inicial con bcv_rate en 0, iva_rate en 16, referral_amount en 2. Crear Cliente General obligatoriamente.
+
+CONSIDERACIONES DE UX
+El módulo POS debe ser rápido con búsquedas optimizadas y mínimo delay. Validación en tiempo real de stock, totales y comisiones. Solicitar confirmación antes de eliminar facturas, productos u otros registros importantes. Mostrar alertas visuales para stock bajo y campos obligatorios. El diseño debe ser responsive y funcionar en tablets para uso en mostrador. El PDF de factura debe generarse solo cuando se genere desde el modulo de reportes donde muestra todas las facturas, en el pos al terminar una venta debe mostrar un modal que muestre como un resumen de la venta, y debe tener un boton que genere el pdf de la venta ya que el que lo genere o no es opcional.
